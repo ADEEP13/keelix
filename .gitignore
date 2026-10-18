@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Never commit keys or data. Credentials live in ~/.config/navsim,
+# radar and state in ~/navsim_data.
+credentials.json
+ui.json
+*.npz
+*.pkl
+*.tif
+*.tiff
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
