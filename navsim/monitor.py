@@ -87,6 +87,11 @@ class MonitorConfig:
     berth_change_db: float = 7.0      # p85 of change, to mark a berth
     min_berth_px: int = 15
     rough_sea_db: float = 4.0         # water this much brighter than usual
+    min_water_frac: float = 0.15      # share of a hull that must lie over
+    #                                   mapped water.  Measured on a year of
+    #                                   passes at two ports: this keeps 100%
+    #                                   of Norfolk's real ships and rejects
+    #                                   63% of a container yard's blocks.
     poor_pass_ratio: float = 0.35     # hulls vs neighbouring passes: below
     #                                   this the pass itself is bad
 
@@ -356,6 +361,7 @@ class BaseReport:
     exit_route: dict | None = None
     static_hulls: list = field(default_factory=list)   # present throughout
     regimes: list = field(default_factory=list)        # level periods
+    no_water_mask: bool = False       # ran without a land-cover map
 
     # -------------------------------------------------------------- series
     def series(self, only_good: bool = False):
@@ -546,7 +552,8 @@ def analyse(key: str, name: str, passes: Sequence[Pass],
             patches: Sequence[Patch], cfg: MonitorConfig | None = None,
             exit_route: dict | None = None,
             land: np.ndarray | None = None,
-            land_cell_m: float = 30.0) -> BaseReport:
+            land_cell_m: float = 30.0,
+            water: np.ndarray | None = None) -> BaseReport:
     """Turn a stack of passes over one base into tracks, events and a series.
 
     ``passes`` and ``patches`` are parallel and in time order.  Patches must
@@ -575,6 +582,14 @@ def analyse(key: str, name: str, passes: Sequence[Pass],
     if land is not None and land.shape != (H, W):
         land = None
     on_land = land if land is not None else np.zeros((H, W), bool)
+    if water is not None and water.shape == (H, W):
+        # Anything the land-cover map does not call water is land, even where
+        # the elevation model says sea level: reclaimed terminals read as 0 m
+        # in every free elevation model, which is how container yards became
+        # "ships".
+        on_land = on_land | ~water
+    else:
+        water = None
     land_reject = 0.5 if land_cell_m <= 15 else (0.7 if land_cell_m <= 60
                                                  else 0.9)
 
@@ -648,6 +663,9 @@ def analyse(key: str, name: str, passes: Sequence[Pass],
                     continue
                 if on_land.ravel()[h.pixels].mean() > land_reject:
                     continue
+                if water is not None and \
+                        water.ravel()[h.pixels].mean() < cfg.min_water_frac:
+                    continue        # not enough water under it to float
                 pr.hulls.append(h)
         occ_flat = occ.ravel()
         for b in berths:
@@ -683,7 +701,8 @@ def analyse(key: str, name: str, passes: Sequence[Pass],
     rep = BaseReport(key, name, results, tracks, [], usual, spread, blab,
                      change, ref_all.astype(np.float32), C, Dc, structure,
                      zone, transform, crs, (H, W), berths, [], exit_route,
-                     static_hulls=static_hulls)
+                     static_hulls=static_hulls,
+                     no_water_mask=water is None)
     rep.notes = _notes(rep, geo)
     rep.events = _events(rep, link_valid, cfg)
     return rep
@@ -1459,6 +1478,11 @@ def _notes(rep: BaseReport, geo: np.ndarray) -> list[str]:
                      f"drawn hollow too.")
     notes.append(f"{len(rep.berths)} berths found (places next to a pier or "
                  f"quay that are sometimes empty and sometimes hold a hull).")
+    if rep.no_water_mask:
+        notes.append("No land-cover map was available, so stacked containers "
+                     "and other metal on a quay can be counted as ships. "
+                     "Counts outside a validated location should be treated "
+                     "as upper bounds.")
     if rep.static_hulls:
         notes.append(f"{len(rep.static_hulls)} ship-shaped object(s) were "
                      f"bright on every pass and are counted as present "

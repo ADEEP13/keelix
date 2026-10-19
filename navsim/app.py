@@ -1495,6 +1495,12 @@ Confidence: every event says what it rests on. A departure is "high" when the sh
 
 A carrier is the one ship whose departure can be followed: its radar signature is unique (330 m long and 80-90 m wide, where tankers and container ships of that length are 50-60 m) and at sea it sits inside a cluster of escorts. After a carrier-sized departure, every radar product over the sea around the base, from the start of the departure window to some days later, is fetched at 30 m in tiles inside the product's own footprint and scanned for targets far brighter than the surrounding sea (a 1.5 km median background), away from land. Candidates at least 240 m long are re-measured at 10 m with the same carrier test as at the pier. Fixes are chained only where the implied speed is 8-32 knots; the first fix's heading comes from the hull axis, resolved away from the base. Sentinel-1 images coasts and straits, not the open ocean, so the result is a sparse chain of fixes where coverage existed, and the reachable area where it did not - never a guessed line.
 
+# Where a ship can float
+
+Radar cannot tell a moored ship from a stack of shipping containers. Measured over a year of passes at two ports, the two are indistinguishable on every radar feature the detector has: median brightness 13.2 vs 13.4 dB, emptiest state 1.4 vs 0.7 dB, swing 18.0 vs 18.7 dB. Both are metal boxes on a flat surface. Elevation models cannot settle it either, because reclaimed container terminals read as 0 m in every free model and are mapped as open sea.
+
+So Keelix asks a land-cover map instead: ESA WorldCover, free and 10 m, with an explicit permanent-water class. A detection must overlap mapped water to count. This keeps 100% of the real ships at the validated location and removes 63% of a container yard's blocks. WorldCover is a 2021 product, so land reclaimed after that still reads as water, and the notes say when no land-cover map could be fetched.
+
 # What it cannot do
 
 It cannot name a ship or tell close classes apart. Ships moored side by side or end to end merge into one hull; the ship count is an estimate (metres of hull alongside is the steadier number). A ship that arrives and leaves between two passes is never seen. Arrival and departure dates are only known to the gap between passes. Submarines sit low in the water and echo weakly. Outside the US the free elevation data is coarser, so the land mask is more forgiving and the depth check may say it cannot trace the exit route.

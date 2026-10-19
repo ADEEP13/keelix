@@ -194,6 +194,29 @@ def get_land(base: Base, shape, transform, crs) -> tuple[np.ndarray | None,
     return mask, cell
 
 
+def get_water(base: Base, shape, transform, crs) -> np.ndarray | None:
+    """Where a ship can float, from ESA WorldCover.  Cached per base."""
+    from .landcover import water_mask
+    path = DATA_DIR / f"{base.key}_water.npz"
+    if path.exists():
+        try:
+            z = np.load(path)
+            if tuple(z["water"].shape) == tuple(shape):
+                return z["water"].astype(bool)
+        except Exception:
+            pass
+    try:
+        water, classes = water_mask(base.bbox, shape, transform, crs)
+    except Exception:
+        return None
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(path, water=water, classes=classes)
+    except OSError:
+        pass
+    return water
+
+
 def get_exit_route(base: Base) -> dict | None:
     """How far, and how deep, the way from the berths out to open sea is.
 
@@ -268,14 +291,16 @@ def analyse_base(base: Base, months: float = 9.0,
         raise ValueError(
             f"{base.name}: only {len(passes)} radar passes on disk. Press "
             f"Update to download them (free).")
-    say(0.4, f"{base.name}: land mask and depth check...")
+    say(0.4, f"{base.name}: land cover, land mask and depth check...")
     land, cell = get_land(base, patches[0].shape, patches[0].transform,
                           patches[0].crs)
+    water = get_water(base, patches[0].shape, patches[0].transform,
+                      patches[0].crs)
     route = get_exit_route(base)
     _check(cancel)
     say(0.6, f"{base.name}: finding hulls in {len(passes)} passes...")
     rep = analyse(base.key, base.name, passes, patches, cfg,
-                  exit_route=route, land=land, land_cell_m=cell)
+                  exit_route=route, land=land, land_cell_m=cell, water=water)
     if land is None:
         rep.notes.append("Land mask unavailable (elevation service did not "
                          "answer): some hits on land may remain.")

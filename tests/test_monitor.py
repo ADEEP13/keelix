@@ -451,3 +451,59 @@ def test_tour_walks_every_view(report, tmp_path, monkeypatch):
         assert app.nb.index(app.nb.select()) == 0
     finally:
         app.destroy()
+
+
+# ------------------------------------------------------------- land cover
+def test_worldcover_tile_naming():
+    from navsim.landcover import tile_name, tiles_for
+    assert tile_name(60.6, 25.3) == "N24E060"
+    assert tile_name(-76.3, 36.95) == "N36W078"
+    assert tile_name(-5.4, -33.9) == "S36W006"
+    # a box spanning a tile edge needs both tiles
+    assert len(tiles_for((59.9, 25.3, 60.2, 25.4))) == 2
+    assert tiles_for((60.59, 25.28, 60.64, 25.32)) == ["N24E060"]
+
+
+def test_water_from_classes_dilates():
+    from navsim.landcover import water_from_classes, WATER, BUILT
+    wc = np.full((20, 20), BUILT, np.uint8)
+    wc[10, 10] = WATER
+    w = water_from_classes(wc, dilate_px=2)
+    assert w[10, 10] and w[8, 10] and w[12, 12]
+    assert not w[0, 0]
+
+
+def test_containers_on_land_are_rejected():
+    """A bright block on mapped land is not a ship, however ship-like."""
+    passes, patches, land = _stack()
+    # a 200 m x 60 m bright block that appears and disappears, on dry land
+    for i, pt in enumerate(patches):
+        if i % 2 == 0:
+            pt.data[0, 60:66, 95:115] = 6.0
+            pt.data[1, 60:66, 95:115] = 0.6
+    water = np.ones((H, W), bool)
+    water[:, 90:] = False                     # everything east of col 90 is land
+    with_water = analyse("t", "T", passes, patches, land=None, water=water)
+    without = analyse("t", "T", passes, patches, land=None)
+    def hits(rep):
+        n = 0
+        for p in rep.passes:
+            for h in p.hulls:
+                _rr, cc = np.divmod(h.pixels, W)
+                if cc.mean() > 90:
+                    n += 1
+        return n
+    assert hits(without) > 0, "the fixture should produce land detections"
+    assert hits(with_water) == 0
+    assert with_water.no_water_mask is False
+    assert without.no_water_mask is True
+
+
+def test_water_mask_keeps_ships_at_a_quay():
+    """A hull partly over the quay still counts if it overlaps water."""
+    passes, patches, land = _stack()
+    water = np.zeros((H, W), bool)
+    water[:, :60] = True                      # ships A and B sit at col 40-55
+    rep = analyse("t", "T", passes, patches, land=land, water=water)
+    assert any(abs(t.lon) >= 0 and t.length_m > 100 for t in rep.tracks)
+    assert len(rep.tracks) >= 2

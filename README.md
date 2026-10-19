@@ -74,6 +74,8 @@ As an example, twelve months at Norfolk (the test case used for validation) show
 
 **Finding ships.** Water beside a pier is never dark on radar: the pier's own echo lifts it 5–12 dB even when the berth is empty, so nothing is compared with open water. For every 10 m pixel the program learns the emptiest it has ever looked across all passes (the 3rd percentile), after removing each viewing angle's overall offset and each pass's overall gain. A ship is a stretch at least 6 dB above its own emptiest state, with a core at least 10 dB above it and a peak of at least 18 dB over open water. The faint halo around each bright core is given to the nearest core, so two ships at one pier stay two ships.
 
+**Where a ship can float.** Radar cannot tell a moored ship from a stack of shipping containers: measured over a year of passes at two ports, the two are indistinguishable on every radar feature (median brightness 13.2 vs 13.4 dB, emptiest state 1.4 vs 0.7 dB). Elevation models cannot settle it either, because reclaimed terminals read as 0 m in every free model and are mapped as sea. Keelix therefore uses [ESA WorldCover](https://esa-worldcover.org/), a free 10 m global land-cover map with an explicit permanent-water class, and requires a detection to overlap mapped water. On the test pair this keeps 100% of Norfolk's real ships and removes 63% of a container yard's blocks, with no change to the Norfolk accuracy figures below. WorldCover is a 2021 product, so land reclaimed after that will still read as water; the app says so when no land-cover map is available.
+
 **Berths and structure.** A berth is a place beside a pier or quay that was empty on some passes and held a hull on others. Piers, quays, cranes and land are *structure*: bright even at their emptiest, never counted as ships. A ship that never left during the record looks like structure too; where such a stretch is as bright as a hull (≥18 dB; piers are 9–15) and shaped like one, it is reported as *present throughout*.
 
 **Reading sizes.** Radar length is accurate to about 10–15%, so size readings are broad categories, never identifications. Shape helps: a very large, wide hull reads differently from two smaller ships moored bow to stern (long but narrow) or side by side (short but wide).
@@ -108,6 +110,7 @@ Ship counts per pass agreed with the photos to within one or two ships. Remainin
 - Anything that arrives and leaves between two passes is never seen; dates are only known to the gap between passes.
 - A ship that never leaves looks like structure unless it is hull-bright.
 - Low-lying vessels echo weakly. Outside the US the free elevation data is coarser.
+- Counts depend on the land-cover map being right. Land reclaimed after 2021 is still mapped as water, so a terminal built since then can inflate counts.
 - The sea search can only look where the satellite looked: coasts and straits, not the open ocean. It is slow (10–40 minutes) and experimental.
 
 ## Purpose and responsible use
@@ -134,10 +137,11 @@ navsim setup                         # store the Copernicus key
 | `navsim/pursuit.py` | the experimental sea search |
 | `navsim/radar.py` | Sentinel-1 search, download and cache |
 | `navsim/store.py` | per-location download, cache, land mask |
+| `navsim/landcover.py` | where a ship can float, from ESA WorldCover |
 | `navsim/bases.py` | the preset locations |
-| `tests/` | 40 tests on synthetic radar with known truth |
+| `tests/` | 44 tests on synthetic radar with known truth |
 | `attic/` | the earlier PlanetScope pipeline, kept for reference, unused |
 
 Data lives in `~/navsim_data/`; deleting it only means downloading again.
 
-Radar: Copernicus Sentinel-1. Land and depth: NOAA global elevation mosaic. Reference imagery in the radar view: Esri World Imagery. MIT licence.
+Radar: Copernicus Sentinel-1. Land cover: ESA WorldCover. Land and depth: NOAA global elevation mosaic. Reference imagery in the radar view: Esri World Imagery. MIT licence.
