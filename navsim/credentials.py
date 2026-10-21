@@ -1,7 +1,10 @@
 """Credential storage.  Only the free Copernicus key is needed.
 
-One file, one place, owner-readable only, outside the project tree so it
-cannot be committed by accident.  Every provider is optional: the pipeline
+One file, one place, outside the project tree so it cannot be committed by
+accident.  It lives in the platform's per-user config directory:
+``~/.config/navsim`` on macOS and Linux, ``%LOCALAPPDATA%\navsim`` on
+Windows (``~/.config`` is not reliably writable there), or wherever
+``NAVSIM_CONFIG_DIR`` points.  Every provider is optional: the pipeline
 degrades to whatever is configured rather than refusing to start.
 
 Design rules, all of them load-bearing:
@@ -10,7 +13,9 @@ Design rules, all of them load-bearing:
   a window title or a report, and it shows four characters.
 * **Environment wins.**  A key in the environment overrides the stored one, so
   CI and shared machines never need the file.
-* **Mode 0600, and the directory 0700.**  Checked on every write.
+* **Mode 0600, and the directory 0700** on POSIX, checked on every write.
+  Windows has no such modes; ``%LOCALAPPDATA%`` is already per-user, so the
+  chmod calls are skipped there rather than pretending to protect anything.
 * **Keys are not validated on save.**  A typo should surface as a clear
   authentication failure from the service, not as a silent empty result.
 """
@@ -23,7 +28,23 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "navsim"
+_IS_WINDOWS = os.name == "nt"
+
+
+def config_dir(env: dict | None = None, windows: bool | None = None) -> Path:
+    """The per-user directory for keys and settings on this platform."""
+    env = os.environ if env is None else env
+    windows = _IS_WINDOWS if windows is None else windows
+    if env.get("NAVSIM_CONFIG_DIR"):
+        return Path(env["NAVSIM_CONFIG_DIR"])
+    if windows:
+        base = env.get("LOCALAPPDATA") or env.get("APPDATA")
+        if base:
+            return Path(base) / "navsim"
+    return Path.home() / ".config" / "navsim"
+
+
+CONFIG_DIR = config_dir()
 CREDENTIALS_PATH = CONFIG_DIR / "credentials.json"
 
 
@@ -56,7 +77,7 @@ def _load() -> dict:
     if not CREDENTIALS_PATH.exists():
         return {}
     try:
-        data = json.loads(CREDENTIALS_PATH.read_text())
+        data = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
     if not isinstance(data, dict):
@@ -65,10 +86,21 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> Path:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    os.chmod(CONFIG_DIR, stat.S_IRWXU)
-    CREDENTIALS_PATH.write_text(json.dumps(data, indent=2))
-    os.chmod(CREDENTIALS_PATH, stat.S_IRUSR | stat.S_IWUSR)
+    """Write the credentials file.  Raises OSError with a readable message."""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        if not _IS_WINDOWS:
+            os.chmod(CONFIG_DIR, stat.S_IRWXU)
+        CREDENTIALS_PATH.write_text(json.dumps(data, indent=2),
+                                    encoding="utf-8")
+        if not _IS_WINDOWS:
+            os.chmod(CREDENTIALS_PATH, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError as exc:
+        raise OSError(
+            f"Could not save the key to {CREDENTIALS_PATH} ({exc.strerror or exc})."
+            f" You can set the environment variables CDSE_CLIENT_ID and "
+            f"CDSE_CLIENT_SECRET instead, or point NAVSIM_CONFIG_DIR at a "
+            f"folder you can write to.") from exc
     return CREDENTIALS_PATH
 
 

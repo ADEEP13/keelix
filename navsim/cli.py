@@ -116,6 +116,15 @@ def main(argv=None) -> int:
     sub.add_parser("setup", help="store the Copernicus key").set_defaults(
         fn=_setup)
     args = p.parse_args(argv)
+    # Reports contain arrows and other non-ASCII text.  A Windows console or
+    # a redirect to a file uses the locale's code page (cp1252), which cannot
+    # encode them; replace what it cannot show instead of crashing.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
     if not getattr(args, "fn", None):
         return _gui(args)
     return int(args.fn(args) or 0)

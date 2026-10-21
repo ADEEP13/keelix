@@ -46,7 +46,7 @@ def load_meta(base: Base) -> dict:
     if not p.exists():
         return {}
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -56,7 +56,7 @@ def save_meta(base: Base, meta: dict) -> None:
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         tmp = _meta_path(base).with_suffix(".tmp")
-        tmp.write_text(json.dumps(meta, indent=1))
+        tmp.write_text(json.dumps(meta, indent=1), encoding="utf-8")
         tmp.replace(_meta_path(base))
     except OSError as exc:
         import warnings

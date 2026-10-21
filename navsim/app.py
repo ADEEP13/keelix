@@ -1356,8 +1356,12 @@ class App(tk.Tk):
             initialfile=f"{rep.key}_{datetime.now(timezone.utc):%Y%m%d}.txt")
         if not path:
             return
-        with open(path, "w") as fh:
-            fh.write(report_text(rep))
+        try:
+            write_report(path, rep)
+        except OSError as exc:
+            messagebox.showerror("Could not save the report",
+                                 f"{path}\n\n{exc}")
+            return
         self.status.set(f"Saved {path}")
 
     def _refresh_key_status(self) -> None:
@@ -1378,8 +1382,8 @@ class App(tk.Tk):
         ttk.Label(fr, wraplength=480, style="Muted.TLabel", text=(
             "Register at dataspace.copernicus.eu, open Sentinel Hub → User "
             "settings → OAuth clients, create a client, and paste its id and "
-            "secret here. Stored only on this computer, readable only by "
-            "you.")).grid(row=1, column=0, columnspan=2, sticky="w",
+            "secret here. Stored only on this computer, in your user "
+            "profile.")).grid(row=1, column=0, columnspan=2, sticky="w",
                           pady=(4, 10))
         cid = tk.StringVar()
         sec = tk.StringVar()
@@ -1408,11 +1412,15 @@ class App(tk.Tk):
             if sec.get().strip():
                 fields["client_secret"] = sec.get().strip()
             if fields:
-                credentials.set_credentials("copernicus", **fields)
+                try:
+                    credentials.set_credentials("copernicus", **fields)
+                except OSError as exc:
+                    msg.set(str(exc))
+                    return
                 radar._TOKEN["value"] = None
             refresh()
             self._refresh_key_status()
-            msg.set("Saved.")
+            msg.set(f"Saved to {credentials.CREDENTIALS_PATH}.")
 
         def test():
             try:
@@ -1435,6 +1443,19 @@ class App(tk.Tk):
 # ==========================================================================
 # text report
 # ==========================================================================
+def write_report(path, rep: BaseReport) -> None:
+    """Save the report as UTF-8.
+
+    Explicit, because Windows otherwise writes in the locale's code page
+    (cp1252), which cannot encode the arrows in the text: the file was
+    created and the write then failed, leaving it empty.  The text is built
+    before the file is opened so a failure never leaves a half-written file.
+    """
+    text = report_text(rep)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+
 def report_text(rep: BaseReport) -> str:
     out = [rep.name, "=" * len(rep.name), rep.headline, ""]
     out += ["Notes:"] + [f"  - {n}" for n in rep.notes] + [""]
@@ -1597,7 +1618,7 @@ TOUR_STEPS = [
 
 def _ui_state() -> dict:
     try:
-        return json.loads(UI_STATE.read_text())
+        return json.loads(UI_STATE.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -1605,7 +1626,7 @@ def _ui_state() -> dict:
 def _save_ui_state(d: dict) -> None:
     try:
         UI_STATE.parent.mkdir(parents=True, exist_ok=True)
-        UI_STATE.write_text(json.dumps(d))
+        UI_STATE.write_text(json.dumps(d), encoding="utf-8")
     except OSError:
         pass
 

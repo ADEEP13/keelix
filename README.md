@@ -37,7 +37,7 @@ python -m navsim
 
 Python 3.10+. On first start a short tour walks through every view.
 
-**Your free key.** Register at [dataspace.copernicus.eu](https://dataspace.copernicus.eu/), open *Sentinel Hub → User settings → OAuth clients*, create a client, and paste its id and secret into **Settings**. It is stored in `~/.config/navsim/credentials.json`, readable only by you. Twelve months of radar for a location takes one to three minutes the first time; after that it opens instantly and offline.
+**Your free key.** Register at [dataspace.copernicus.eu](https://dataspace.copernicus.eu/), open *Sentinel Hub → User settings → OAuth clients*, create a client, and paste its id and secret into **Settings**. It is stored in your user profile: `~/.config/navsim/credentials.json` on macOS and Linux (readable only by you), `%LOCALAPPDATA%\navsim\credentials.json` on Windows. You can also set `CDSE_CLIENT_ID` and `CDSE_CLIENT_SECRET` as environment variables instead. Twelve months of radar for a location takes one to three minutes the first time; after that it opens instantly and offline.
 
 ## What it shows
 

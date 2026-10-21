@@ -507,3 +507,75 @@ def test_water_mask_keeps_ships_at_a_quay():
     rep = analyse("t", "T", passes, patches, land=land, water=water)
     assert any(abs(t.lon) >= 0 and t.length_m > 100 for t in rep.tracks)
     assert len(rep.tracks) >= 2
+
+
+
+# ------------------------------------------------------- Windows (issues #1, #2)
+def test_report_is_written_as_utf8_whatever_the_locale(report, tmp_path,
+                                                       monkeypatch):
+    """Issue #2: on Windows the report was opened in the locale code page
+    (cp1252), failed on the arrows, and left an empty file.  Simulate that
+    platform by making any open() without an explicit encoding use cp1252."""
+    import builtins
+    from navsim import app as appmod
+    real_open = builtins.open
+
+    def windows_open(file, mode="r", *a, encoding=None, **k):
+        if "b" not in mode and encoding is None:
+            encoding = "cp1252"
+        return real_open(file, mode, *a, encoding=encoding, **k)
+    import copy
+    from navsim.monitor import Event
+    report = copy.copy(report)
+    t = report.passes[3].when
+    report.events = list(report.events) + [Event(
+        "shift-down", t, t, "Level fell: 24 → 15 ships",
+        "A level shift, as real reports contain.", 3)]
+    monkeypatch.setattr(builtins, "open", windows_open)
+    text = appmod.report_text(report)
+    assert "→" in text, "fixture must exercise a character cp1252 lacks"
+    with pytest.raises(UnicodeEncodeError):          # the old behaviour
+        with open(tmp_path / "old.txt", "w") as fh:
+            fh.write(text)
+    path = tmp_path / "report.txt"
+    appmod.write_report(path, report)                 # the fix
+    assert path.read_bytes().decode("utf-8") == text
+
+
+def test_config_dir_per_platform(tmp_path):
+    """Issue #1: ~/.config is not writable on some Windows machines."""
+    from pathlib import Path
+    from navsim.credentials import config_dir
+    win = config_dir({"LOCALAPPDATA": r"C:\Users\u\AppData\Local"},
+                     windows=True)
+    assert win == Path(r"C:\Users\u\AppData\Local") / "navsim"
+    assert config_dir({}, windows=False) == Path.home() / ".config" / "navsim"
+    assert config_dir({"NAVSIM_CONFIG_DIR": str(tmp_path)},
+                      windows=True) == tmp_path
+
+
+def test_credentials_save_skips_chmod_on_windows(tmp_path, monkeypatch):
+    from navsim import credentials as cr
+
+    def boom(*a, **k):
+        raise PermissionError(5, "Access is denied")
+    monkeypatch.setattr(cr, "_IS_WINDOWS", True)
+    monkeypatch.setattr(cr, "CONFIG_DIR", tmp_path / "navsim")
+    monkeypatch.setattr(cr, "CREDENTIALS_PATH",
+                        tmp_path / "navsim" / "credentials.json")
+    monkeypatch.setattr(cr.os, "chmod", boom)
+    for v in ("CDSE_CLIENT_ID", "CDSE_CLIENT_SECRET"):
+        monkeypatch.delenv(v, raising=False)
+    cr.set_credentials("copernicus", client_id="abc123", client_secret="s3cr3t")
+    assert cr.get("copernicus", "client_id") == "abc123"
+
+
+def test_credentials_save_failure_is_readable(tmp_path, monkeypatch):
+    from navsim import credentials as cr
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("x")                  # a file where the dir should be
+    monkeypatch.setattr(cr, "CONFIG_DIR", blocker / "navsim")
+    monkeypatch.setattr(cr, "CREDENTIALS_PATH",
+                        blocker / "navsim" / "credentials.json")
+    with pytest.raises(OSError, match="CDSE_CLIENT_ID"):
+        cr.set_credentials("copernicus", client_id="a", client_secret="b")
