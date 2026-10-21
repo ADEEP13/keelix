@@ -1,34 +1,13 @@
-"""Carrier pursuit: where did a carrier go after it left?
+"""Experimental size-candidate search over available coastal radar imagery.
 
-A carrier is the one ship this can be done for.  Its radar signature is
-unique -- a 330 m hull 80-90 m wide, where tankers and container ships of
-the same length are 50-60 m -- and at sea it sits inside a cluster of
-escorts that no merchant traffic produces.
+Budgeted tiles are sampled at 50 m; bright targets at least 200 m long
+are candidates for remeasurement on a 10 m output grid.  Remeasurement
+uses the same acquisition, so it is not independent identity evidence.
+Neither a long, wide return nor nearby vessels uniquely identifies a carrier.
 
-What is possible, honestly
---------------------------
-Sentinel-1 images coasts systematically (roughly 250 km out, every one to
-three days on the US east coast) and the main straits; it barely images the
-open ocean.  So the output is a sparse chain of *fixes* where coverage
-existed, joined only where the timing is physically possible (10-32 knots),
-and the reachable area where it was not.  Never a guessed line across an
-ocean nobody looked at.
-
-How
----
-1. Every radar product over a region around the base, from the start of the
-   departure window to ``days_after`` later, is fetched at 30 m in tiles
-   that lie inside the product's own footprint (the rest of the region is
-   outside the swath and would come back blank).
-2. On each tile, targets are the pixels far brighter than the sea around
-   them (CFAR against a 1.5 km median background), away from land.  A
-   carrier candidate is a target at least 240 m long at 30 m.
-3. Each candidate is re-fetched at 10 m and measured properly; the carrier
-   test is the same as at the pier (length >= 270 m and width >= 72 m).
-   Other targets of 80-220 m within 25 km are its escorts.
-4. Fixes are chained in time where the implied speed is plausible.  The
-   first fix's heading is read from the hull axis, with the 180-degree
-   ambiguity resolved away from the base.
+The legacy greedy timing links are hypotheses, not verified vessel tracks.
+They do not match identity or the departing hull's dimensions.  Coverage
+gaps, failed checks and unverified candidates must remain explicit.
 """
 
 from __future__ import annotations
@@ -75,14 +54,14 @@ class Target:
 @dataclass
 class Fix:
     target: Target
-    confirmed: bool
+    confirmed: bool            # successful fine-grid measurement, NOT identity
     length_m: float            # at 10 m
     width_m: float
     escorts: list[Target]
     heading_deg: float | None = None     # compass, resolved
     speed_kn: float | None = None        # from the previous link
     link_from: str = ""                  # "base" or an earlier fix's date
-    confidence: str = "medium"
+    confidence: str = "unverified"
     why: str = ""
 
     @property
@@ -90,10 +69,12 @@ class Fix:
         return self.target.when
 
     fixed: bool = False                  # same spot on another date
+    repeat_checked: bool = False         # usable repeat-date evidence exists
+    verification_note: str = ""
 
     @property
     def is_carrier(self) -> bool:
-        """Carrier-shaped at 10 m.  Never from the coarse scan alone."""
+        """Meets size thresholds on the fine grid; identity is unverified."""
         return (self.confirmed and not self.fixed
                 and self.length_m >= CARRIER_MIN_LENGTH_M
                 and self.width_m >= CARRIER_MIN_WIDTH_M)
@@ -106,6 +87,10 @@ class Searched:
     bbox: tuple[float, float, float, float]
     tiles: int
     blank: int
+    # Bounding envelopes of valid pixels in analysed tiles, not full swaths.
+    # Envelopes can include internal gaps; an empty list means no usable data.
+    coverage_boxes: list[tuple[float, float, float, float]] = field(
+        default_factory=list)
 
 
 @dataclass
@@ -322,6 +307,23 @@ def _confirm(t: Target, geometry: str) -> tuple[float, float, float]:
     return best.length_m, best.width_m, best.peak_db
 
 
+def _coverage_box(patch: radar.Patch, requested: Sequence[float]
+                  ) -> tuple[float, float, float, float]:
+    """Envelope of valid pixels, clipped to the requested tile.
+
+    This deliberately does not claim every pixel inside the box was imaged.
+    The map labels these as envelopes, since swaths can have internal gaps.
+    """
+    rr, cc = np.nonzero(patch.valid)
+    a, b, c, d, e, f = patch.transform[:6]
+    cols = np.array([cc.min(), cc.max() + 1, cc.min(), cc.max() + 1])
+    rows = np.array([rr.min(), rr.min(), rr.max() + 1, rr.max() + 1])
+    lon, lat = radar.to_lonlat(patch.crs)(a * cols + b * rows + c,
+                                        d * cols + e * rows + f)
+    return _intersect((float(np.min(lon)), float(np.min(lat)),
+                       float(np.max(lon)), float(np.max(lat))), requested)
+
+
 # ----------------------------------------------------------------- search
 def search(base_key: str, base_name: str, base_lonlat: tuple[float, float],
            t0: datetime, t1: datetime, length_m: float, width_m: float,
@@ -344,6 +346,9 @@ def search(base_key: str, base_name: str, base_lonlat: tuple[float, float],
     say(0.02, f"{len(products)} products in {len(passes)} passes; building "
               f"land mask…")
     land_fn = _land_function(region)
+    if land_fn is None:
+        P.notes.append("Land exclusion was unavailable; land and coastal "
+                       "structures may appear among the candidates.")
     plan = []
     for key, prs in sorted(passes.items(), key=lambda kv: kv[1][0].when):
         union = (min(p.bbox[0] for p in prs), min(p.bbox[1] for p in prs),
@@ -379,10 +384,10 @@ def search(base_key: str, base_name: str, base_lonlat: tuple[float, float],
                 0.5 * (tb[1] + tb[3])))[:per]
             trimmed.append((pr, clip, tiles))
         plan = trimmed
-        P.notes.append(f"{total} tiles would cover every strip; limited to "
-                       f"{sum(len(t) for _p, _c, t in plan)} ({per} per pass, "
-                       f"nearest the base first). Raise the limit for a "
-                       f"fuller search.")
+        P.notes.append(f"The catalogue produced {total} planned tiles; "
+                       f"at most {max_tiles} will be attempted, nearest "
+                       f"the base first within each pass. Some passes or "
+                       f"parts of passes may be unsearched.")
         total = sum(len(t) for _p, _c, t in plan)
     say(0.03, f"{min(total, max_tiles)} radar tiles to fetch at "
               f"{COARSE_GSD_M:.0f} m; Copernicus throttles free accounts, so "
@@ -390,14 +395,21 @@ def search(base_key: str, base_name: str, base_lonlat: tuple[float, float],
     done = 0
     small: list[Target] = []
     for pr, clip, tiles in plan:
+        if done >= max_tiles:
+            break
         if cancel is not None and cancel.is_set():
             from .store import Cancelled
             raise Cancelled()
-        blank = 0
+        blank = attempted = 0
+        coverage_boxes = []
         for tb in tiles:
             if done >= max_tiles:
                 break
+            if cancel is not None and cancel.is_set():
+                from .store import Cancelled
+                raise Cancelled()
             done += 1
+            attempted += 1
             say(0.03 + 0.9 * done / max(min(total, max_tiles), 1),
                 f"{pr.when:%d %b %H:%M} {pr.geometry}: tile {done}/"
                 f"{min(total, max_tiles)}, {len(P.candidates)} candidates")
@@ -410,14 +422,21 @@ def search(base_key: str, base_name: str, base_lonlat: tuple[float, float],
             except Exception:
                 blank += 1
                 continue
+            if patch.valid.mean() < 0.05:
+                blank += 1
+                continue
+            coverage = _coverage_box(patch, tb)
+            if coverage[2] > coverage[0] and coverage[3] > coverage[1]:
+                coverage_boxes.append(coverage)
             for t in _measure_targets(patch, land_fn, min_px=2):
                 t.geometry = pr.geometry
                 if t.length_m >= CANDIDATE_MIN_M:
                     P.candidates.append(t)
                 else:
                     small.append(t)
-        P.searched.append(Searched(pr.when, pr.geometry, clip, len(tiles),
-                                   blank))
+        if attempted:
+            P.searched.append(Searched(pr.when, pr.geometry, clip, attempted,
+                                       blank, coverage_boxes))
     # Confirm the most carrier-like candidates first: Copernicus throttles
     # free accounts after a few hundred requests in a row, so the 10 m look
     # is spent where it matters -- wide, long, bright targets.
@@ -430,27 +449,50 @@ def search(base_key: str, base_name: str, base_lonlat: tuple[float, float],
         if cancel is not None and cancel.is_set():
             from .store import Cancelled
             raise Cancelled()
+        note = ""
         if confirm and k < max_confirm:
             try:
                 L, Wd, pk = _confirm(t, t.geometry)
+                if not (math.isfinite(L) and math.isfinite(Wd)
+                        and math.isfinite(pk) and L > 0 and Wd > 0):
+                    L, Wd, pk = 0.0, 0.0, 0.0
+                    note = "No usable fine-grid measurement."
             except Exception:
-                L, Wd, pk = t.length_m, t.width_m, t.peak_db
+                L, Wd, pk = 0.0, 0.0, 0.0
+                note = "Fine-grid measurement failed; coarse candidate only."
         else:
             L, Wd, pk = 0.0, 0.0, 0.0
+            note = ("Fine-grid measurement disabled." if not confirm else
+                    "Fine-grid measurement not attempted: candidate budget.")
         esc = [s for s in small
                if abs((s.when - t.when).total_seconds()) < 3600
                and 80 <= s.length_m <= 220
                and haversine_km(s.lon, s.lat, t.lon, t.lat) <= ESCORT_RANGE_KM]
-        P.fixes.append(Fix(t, L > 0, L, Wd, esc if L > 0 else []))
+        P.fixes.append(Fix(t, L > 0, L, Wd, esc if L > 0 else [],
+                           verification_note=note))
     P.fixes.sort(key=lambda f: f.when)
     _reject_fixed(P)
     say(0.97, "checking carrier-shaped targets against another date…")
     for f in P.fixes:
         if f.is_carrier:
             try:
-                f.fixed = _seen_on_another_date(f.target)
+                repeated = _seen_on_another_date(f.target)
             except Exception:
-                pass
+                repeated = None
+            f.repeat_checked = repeated is not None
+            if repeated is not None:
+                f.fixed = repeated
+            else:
+                f.verification_note = "Repeat-date check unavailable."
+    unmeasured = sum(not f.confirmed for f in P.fixes)
+    if unmeasured:
+        P.notes.append(f"{unmeasured} coarse candidate(s) have no successful "
+                       "fine-grid measurement; they are not confirmed size "
+                       "candidates.")
+    unchecked = sum(f.is_carrier and not f.repeat_checked for f in P.fixes)
+    if unchecked:
+        P.notes.append(f"{unchecked} size candidate(s) lack a usable "
+                       "repeat-date check; stationary returns remain possible.")
     _chain(P)
     say(1.0, "done")
     return P
@@ -458,8 +500,7 @@ def search(base_key: str, base_name: str, base_lonlat: tuple[float, float],
 
 
 def _reject_fixed(P: Pursuit) -> None:
-    """A target at the same spot on another date is a bridge, platform,
-    buoy or wreck, not a ship under way."""
+    """Flag stationary or recurrent returns, without identifying their source."""
     allt = [f.target for f in P.fixes] + list(P.candidates)
     for f in P.fixes:
         t = f.target
@@ -468,13 +509,15 @@ def _reject_fixed(P: Pursuit) -> None:
                 continue
             if haversine_km(o.lon, o.lat, t.lon, t.lat) <= FIXED_REPEAT_KM:
                 f.fixed = True
+                f.repeat_checked = True
                 break
 
 
-def _seen_on_another_date(t: Target, days: int = 13) -> bool:
+def _seen_on_another_date(t: Target, days: int = 13) -> bool | None:
     """Is there a similar target at the same spot on the previous or next
     pass of the same orbit?  Bridge islands, platforms and wrecks are; a
-    ship under way is not.  One 5 km request at 10 m per candidate."""
+    ship under way is not.  None means no usable repeat observation, not a
+    successful negative check.  A stationary ship can also repeat."""
     half = 2.5 / KM_PER_DEG
     hl = half / max(math.cos(math.radians(t.lat)), 0.2)
     box = (t.lon - hl, t.lat - half, t.lon + hl, t.lat + half)
@@ -486,6 +529,7 @@ def _seen_on_another_date(t: Target, days: int = 13) -> bool:
     others.sort(key=lambda p: (p.geometry != t.geometry,
                                abs((p.when - t.when).total_seconds())))
     tried = 0
+    negative_checked = False
     for o in others:
         if tried >= 3:
             break
@@ -503,12 +547,21 @@ def _seen_on_another_date(t: Target, days: int = 13) -> bool:
                and haversine_km(x.lon, x.lat, t.lon, t.lat) <= FIXED_REPEAT_KM
                for x in tg):
             return True
-    return False
+        # A mostly valid tile may still be blank at the candidate.  Partial
+        # imagery can establish a positive repeat, but not a negative check.
+        if patch.valid.all():
+            negative_checked = True
+    return False if negative_checked else None
 
 
 # ------------------------------------------------------------------ chain
 def _chain(P: Pursuit) -> None:
-    """Link carrier fixes to the departure and to each other by timing."""
+    """Retain legacy timing hypotheses without claiming vessel identity."""
+    for f in P.fixes:
+        f.link_from = ""
+        f.speed_kn = f.heading_deg = None
+        f.confidence = "unverified"
+        f.why = ""
     fixes = sorted([f for f in P.fixes if f.is_carrier],
                    key=lambda f: f.when)
     prev = None
@@ -519,40 +572,41 @@ def _chain(P: Pursuit) -> None:
             # it left some time in the window: the speed needed depends on
             # when; feasible if some departure time in [t0, t1] works
             h_max = max((t.when - P.t0).total_seconds() / 3600.0, 0.1)
-            h_min = max((t.when - P.t1).total_seconds() / 3600.0, 0.1)
             v_min = km / 1.852 / h_max
-            v_max = km / 1.852 / h_min if t.when > P.t1 else float("inf")
-            ok = v_min <= MAX_SPEED_KN
+            ok = t.when > P.t0 and v_min <= MAX_SPEED_KN
             if ok:
                 f.link_from = "base"
                 f.speed_kn = v_min
                 b = bearing_deg(P.base_lonlat[0], P.base_lonlat[1], t.lon,
                                 t.lat)
                 f.heading_deg = _resolve_heading(t.angle_deg, b)
-                f.confidence = ("high" if len(f.escorts) >= 2 and f.confirmed
-                                else "medium" if f.confirmed else "low")
                 f.why = (f"{km:.0f} km from the base, which needs at least "
                          f"{v_min:.0f} kn given the departure window; "
-                         f"{len(f.escorts)} escort-sized target(s) within "
+                         f"{len(f.escorts)} nearby size-filtered target(s) within "
                          f"{ESCORT_RANGE_KM:.0f} km; hull {f.length_m:.0f} x "
-                         f"{f.width_m:.0f} m at 10 m")
+                         f"{f.width_m:.0f} m on the 10 m grid. "
+                         f"Timing compatibility does not establish identity")
                 prev = f
+            else:
+                f.why = ("outside the departure timing/speed assumptions; "
+                         "identity remains unknown")
         else:
             v = speed_between(prev.target.lon, prev.target.lat, prev.when,
                               t.lon, t.lat, t.when)
-            if MIN_SPEED_KN * 0.5 <= v <= MAX_SPEED_KN:
+            if t.when > prev.when and MIN_SPEED_KN * 0.5 <= v <= MAX_SPEED_KN:
                 f.link_from = f"{prev.when:%d %b %H:%M}"
                 f.speed_kn = v
                 f.heading_deg = bearing_deg(prev.target.lon, prev.target.lat,
                                             t.lon, t.lat)
-                f.confidence = ("high" if len(f.escorts) >= 2 and f.confirmed
-                                else "medium")
-                f.why = (f"{v:.0f} kn from the previous fix; "
-                         f"{len(f.escorts)} escort-sized target(s) nearby")
+                f.why = (f"{v:.0f} kn implied straight-line average from the "
+                         f"previous candidate if these were the same vessel; "
+                         f"{len(f.escorts)} nearby size-filtered target(s). "
+                         f"Neither identity nor speed was measured")
                 prev = f
             else:
-                f.why = (f"would need {v:.0f} kn from the previous fix: not "
-                         f"the same ship")
+                f.why = (f"outside the previous candidate's timing/speed "
+                         f"assumptions ({v:.0f} kn implied); this does not "
+                         f"establish or exclude vessel identity")
 
 
 def _resolve_heading(axis_deg: float, away_bearing: float) -> float:
@@ -576,51 +630,67 @@ def reach_km(hours: float, speed_kn: float) -> float:
 
 
 def chain_text(P: Pursuit) -> str:
-    lines = [f"{P.base_name}: carrier-sized hull ({P.length_m:.0f} x "
-             f"{P.width_m:.0f} m) left between {P.t0:%d %b} and {P.t1:%d %b}."]
+    lines = [f"{P.base_name}: search after a reported carrier-sized departure "
+             f"({P.length_m:.0f} x {P.width_m:.0f} m) between "
+             f"{P.t0:%d %b} and {P.t1:%d %b}.",
+             "Experimental size/timing hypotheses only. Vessel identity is "
+             "unverified; nearby targets are not confirmed escorts."]
     n_pass = len(P.searched)
     n_tiles = sum(s.tiles for s in P.searched)
-    lines.append(f"Searched {n_pass} radar passes ({n_tiles} tiles at "
-                 f"{COARSE_GSD_M:.0f} m) "
-                 f"over a {haversine_km(P.region[0], P.base_lonlat[1], P.region[2], P.base_lonlat[1]):.0f} km wide region "
-                 f"up to {(max((s.when for s in P.searched), default=P.t1) - P.t1).days} days after the window.")
+    n_blank = sum(s.blank for s in P.searched)
+    lines.append(f"Attempted {n_tiles} tiles across {n_pass} radar passes "
+                 f"at {COARSE_GSD_M:.0f} m output spacing; "
+                 f"{n_tiles - n_blank} usable, {n_blank} failed or blank. "
+                 "Coverage envelopes can contain gaps; unsearched areas "
+                 "provide no evidence of absence.")
     chain = P.chain
+    shaped = [f for f in P.fixes if f.is_carrier]
     if not chain:
-        lines.append("No carrier-shaped target was found on any covered pass. "
-                     "Either it sailed outside the imaged strips (most of the "
-                     "ocean is never imaged), or it was moving between "
-                     "strips when each was taken.")
+        if shaped:
+            lines.append("Size candidates were found, but none was linked "
+                         "under the timing assumptions. Identity is unknown.")
+        elif n_tiles == n_blank:
+            lines.append("No usable radar coverage was analysed; no detection "
+                         "conclusion can be drawn.")
+        elif any(not f.confirmed for f in P.fixes):
+            lines.append("No remeasured candidate met the size checks; some "
+                         "coarse candidates remain unverified.")
+        else:
+            lines.append("No candidate passed the size and stationary-repeat "
+                         "checks in the analysed tiles. This does not show "
+                         "that a particular vessel was absent.")
     for f in chain:
-        hd = (f" heading {compass(f.heading_deg)} ({f.heading_deg:.0f}°)"
-              if f.heading_deg is not None else "")
         lines.append(
-            f"- {f.when:%d %b %H:%M} UTC: carrier-sized target {f.length_m:.0f}"
+            f"- {f.when:%d %b %H:%M} UTC: size candidate {f.length_m:.0f}"
             f" x {f.width_m:.0f} m at {abs(f.target.lat):.2f}"
             f"{'N' if f.target.lat >= 0 else 'S'} {abs(f.target.lon):.2f}"
-            f"{'E' if f.target.lon >= 0 else 'W'}{hd}, with "
-            f"{len(f.escorts)} escort-sized target(s); "
-            f"{'from the base' if f.link_from == 'base' else 'from the fix of ' + f.link_from}"
-            f" at about {f.speed_kn:.0f} kn. Confidence {f.confidence}: "
+            f"{'E' if f.target.lon >= 0 else 'W'}. Identity unverified. "
             f"{f.why}.")
+        if f.verification_note:
+            lines.append(f"  {f.verification_note}")
     other = [f for f in P.fixes if f.is_carrier and not f.link_from]
     if other:
-        lines.append(f"{len(other)} other carrier-shaped target(s) were seen "
-                     f"but cannot be this ship on timing (for example "
+        lines.append(f"{len(other)} other size candidate(s) were seen "
+                     f"but not linked under the timing assumptions (for example "
                      f"{other[0].when:%d %b}: {other[0].why}).")
     n_conf = sum(f.confirmed for f in P.fixes)
     n_fixed = sum(f.fixed for f in P.fixes)
     lines.append(f"{len(P.candidates)} rough candidates at {COARSE_GSD_M:.0f}"
-                 f" m; {n_conf} measured at 10 m, {n_fixed} rejected as fixed "
-                 f"structures, {sum(f.is_carrier for f in P.fixes)} "
-                 f"carrier-shaped.")
+                 f" m; {n_conf} remeasured on a 10 m grid, {n_fixed} flagged "
+                 f"as stationary or recurrent, {len(shaped)} meet the size "
+                 f"checks. Remeasuring the same acquisition does not "
+                 f"independently confirm a vessel.")
+    check_notes: dict[str, int] = {}
+    for f in P.fixes:
+        if f.verification_note and not f.link_from:
+            check_notes[f.verification_note] = (
+                check_notes.get(f.verification_note, 0) + 1)
+    lines.extend(f"Check: {count} candidate(s): {note}"
+                 for note, count in check_notes.items())
     for a in P.arrivals:
-        lines.append(f"- Possible arrival: {a['text']}")
-    if chain:
-        last = chain[-1]
-        hrs = 24.0
-        lines.append(
-            f"After the last fix, one day at 15-25 kn puts it "
-            f"{reach_km(hrs, 15):.0f}-{reach_km(hrs, 25):.0f} km further on.")
+        lines.append(f"- Timing-compatible arrival (identity unverified): "
+                     f"{a['text']}")
+    lines.extend(f"Note: {note}" for note in P.notes)
     return "\n".join(lines)
 
 

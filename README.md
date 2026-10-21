@@ -64,7 +64,7 @@ Python 3.10+. On first start a short tour walks through every view.
 </tr>
 <tr>
 <td valign="top"><b>Compare.</b> Several harbours on one time axis, each as a percentage of its own usual level.</td>
-<td valign="top"><b>Sea search (experimental).</b> Scans radar strips near the coast for very large vessels after a departure. It mostly shows how little of the sea is actually imaged: coasts and straits are covered, open ocean is not.</td>
+<td valign="top"><b>Sea search (experimental).</b> Inspects available radar strips for large, wide targets after a departure. Detections are size candidates and dashed links are tentative timing associations; vessel identity remains unverified. Coverage is sparse, especially offshore.</td>
 </tr>
 </table>
 
@@ -79,6 +79,10 @@ As an example, twelve months at Norfolk (the test case used for validation) show
 **Berths and structure.** A berth is a place beside a pier or quay that was empty on some passes and held a hull on others. Piers, quays, cranes and land are *structure*: bright even at their emptiest, never counted as ships. A ship that never left during the record looks like structure too; where such a stretch is as bright as a hull (≥18 dB; piers are 9–15) and shaped like one, it is reported as *present throughout*.
 
 **Reading sizes.** Radar length is accurate to about 10–15%, so size readings are broad categories, never identifications. Shape helps: a very large, wide hull reads differently from two smaller ships moored bow to stern (long but narrow) or side by side (short but wide).
+
+**Experimental sea search.** The search scans 60 km tiles at 50 m output spacing and may re-measure candidates at least 200 m long at 10 m output spacing. This uses the same acquisition, so it is not independent confirmation. Pixel spacing is not spatial resolution: Copernicus lists IW GRD high-resolution products at about 20 × 22 m resolution with 10 m pixel spacing. Size and compatible timing do not identify a vessel, and nearby targets do not establish an escort relationship. [Copernicus product specifications](https://sentiwiki.copernicus.eu/web/s1-products).
+
+The current association rule starts with the first size candidate whose timing fits, then considers later candidates relative to it. It does not match dimensions to the original departure, and a wrong association can affect every later link. The displayed links remain hypotheses.
 
 **Anomalies.**
 - *Level periods* — the ships-in-port series is cut into periods of steady level by exact optimal partitioning (every set of cuts is scored; the cost is each period's spread around its median, with a penalty per cut scaled to the series' own noise). A fall from 24 to 15 that holds for twelve passes is a level shift; one odd pass is not.
@@ -98,6 +102,8 @@ Every threshold was set against PlanetScope photographs of Norfolk taken within 
 
 Ship counts per pass agreed with the photos to within one or two ships. Remaining misses are ships that never moved in the record, small or low-echo craft, and ships that moved during the hours between photo and radar. This is a spot check on one location, not a full accuracy study; the other presets ran cleanly but have not been checked against photographs.
 
+These berth-detection figures do not validate the experimental sea search or its tentative associations. Its false-positive rate has not been measured.
+
 <p align="center">
   <img src="docs/validation_norfolk_0903.png" alt="Radar hulls on a Planet photo" width="520"><br>
   <sub>Radar hulls from 3 September (red) on the Planet photograph of 4 September. Black: piers and structure. Orange: a ship present on every pass.</sub>
@@ -111,7 +117,7 @@ Ship counts per pass agreed with the photos to within one or two ships. Remainin
 - A ship that never leaves looks like structure unless it is hull-bright.
 - Low-lying vessels echo weakly. Outside the US the free elevation data is coarser.
 - Counts depend on the land-cover map being right. Land reclaimed after 2021 is still mapped as water, so a terminal built since then can inflate counts.
-- The sea search can only look where the satellite looked: coasts and straits, not the open ocean. It is slow (10–40 minutes) and experimental.
+- The sea search can only inspect available acquisitions within its request budget. Failed requests and unchecked candidates leave additional gaps; map boxes are bounding envelopes of usable pixels and can contain gaps. An empty result does not establish that no vessel was present. It is slow (10–40 minutes) and experimental.
 
 ## Purpose and responsible use
 
@@ -139,7 +145,7 @@ navsim setup                         # store the Copernicus key
 | `navsim/store.py` | per-location download, cache, land mask |
 | `navsim/landcover.py` | where a ship can float, from ESA WorldCover |
 | `navsim/bases.py` | the preset locations |
-| `tests/` | 44 tests on synthetic radar with known truth |
+| `tests/` | synthetic radar, search failure handling, and UI regression tests |
 | `attic/` | the earlier PlanetScope pipeline, kept for reference, unused |
 
 Data lives in `~/navsim_data/`; deleting it only means downloading again.

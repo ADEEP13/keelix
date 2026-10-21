@@ -645,20 +645,21 @@ class App(tk.Tk):
         f.columnconfigure(1, weight=3)
         head = ttk.Frame(f)
         head.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        ttk.Label(head, text="Sea search · coastal strips only").pack(
+        ttk.Label(head, text="Sea search · experimental size candidates").pack(
             anchor="w")
         sl = ttk.Label(head, style="Muted.TLabel", text=(
-            "Pick a carrier departure, then search every radar pass over "
-            "the sea around the base for a carrier-sized hull with escorts. "
-            "Only the strips the satellite imaged can be searched; Copernicus "
-            "throttles free accounts, so a search takes 10-40 minutes."))
+            "Pick a carrier-sized departure to inspect nearby radar strips "
+            "for large, wide targets. Size and compatible timing do not "
+            "establish vessel identity; nearby targets are not verified "
+            "escorts. Coverage and request limits leave gaps. A search "
+            "usually takes 10-40 minutes."))
         sl.pack(anchor="w", fill="x")
         _autowrap(sl)
         left = self._panel(f, row=1, column=0, sticky="nsew", padx=(0, 8))
         left.rowconfigure(1, weight=1)
         left.rowconfigure(3, weight=2)
         left.columnconfigure(0, weight=1)
-        ttk.Label(left, text="CARRIER DEPARTURES AT THIS BASE",
+        ttk.Label(left, text="CARRIER-SIZED DEPARTURES AT THIS BASE",
                   style="Caps.TLabel").grid(row=0, column=0, sticky="w",
                                             pady=(0, 8))
         self.car_tree = ttk.Treeview(left, columns=("when", "size", "conf"),
@@ -683,7 +684,7 @@ class App(tk.Tk):
         ttk.Spinbox(ctl, from_=200, to=1500, increment=100,
                     textvariable=self.car_radius, width=5).pack(
             side="left", padx=(4, 10))
-        ttk.Button(ctl, text="Search the sea for it", style="Accent.TButton",
+        ttk.Button(ctl, text="Inspect radar candidates", style="Accent.TButton",
                    command=self._pursue).pack(side="left")
         self.car_text = _scrolled_text(left, self.fonts["body"], height=12)
         self.car_text.frame.grid(row=3, column=0, sticky="nsew")
@@ -692,8 +693,8 @@ class App(tk.Tk):
         right.columnconfigure(0, weight=1)
         self.pfig, self.pcanvas, w = _figure(right, (8, 6))
         w.grid(row=0, column=0, sticky="nsew")
-        charts.blank(self.pfig, "Select a carrier departure and press "
-                                "'Search the sea for it'.")
+        charts.blank(self.pfig, "Select a carrier-sized departure and press "
+                                "'Inspect radar candidates'.")
         self.pursuits: dict[str, pursuit.Pursuit] = {}
 
     def _fill_carriers(self, rep: BaseReport) -> None:
@@ -716,7 +717,7 @@ class App(tk.Tk):
         sel = self.car_tree.selection()
         if rep is None or not sel:
             messagebox.showinfo("Pick a departure",
-                                "Select a carrier departure first.")
+                                "Select a carrier-sized departure first.")
             return
         if not radar.have_credentials():
             self._settings()
@@ -730,7 +731,9 @@ class App(tk.Tk):
         self.car_text.insert("1.0", "Searching… each radar strip is fetched "
                                     "at 50 m in 60 km tiles and scanned for a "
                                     "hull at least 200 m long; the best "
-                                    "candidates are re-measured at 10 m. "
+                                    "candidates are re-measured at 10 m "
+                                    "output spacing from the same acquisition. "
+                                    "This does not confirm vessel identity. "
                                     "Copernicus throttles free accounts, so "
                                     "this takes 10-40 minutes. You can cancel "
                                     "and resume later: fetched tiles are "
@@ -755,10 +758,10 @@ class App(tk.Tk):
             self.car_text.insert("1.0", P.summary())
             charts.draw_pursuit(self.pfig, P, bm)
             self.pcanvas.draw_idle()
-            self.status.set(f"Carrier search done: {len(P.chain)} linked "
-                            f"fix(es), {len(P.searched)} passes searched")
+            self.status.set(f"Sea search done: {len(P.chain)} tentative "
+                            f"association(s), {len(P.searched)} passes attempted")
 
-        self._submit("Searching the sea for the carrier…", job, done)
+        self._submit("Inspecting experimental sea-search candidates…", job, done)
 
     def _build_method(self) -> None:
         f = ttk.Frame(self.nb, padding=(10, 10, 0, 0))
@@ -1512,9 +1515,11 @@ Long stays: a ship at a berth for twice the typical stay seen at that same berth
 
 Confidence: every event says what it rests on. A departure is "high" when the ship was seen on two or more passes and the berth then imaged empty on two; "low" when only one pass has shown it empty. An arrival seen once is "medium" until the next pass.
 
-# Carrier pursuit
+# Experimental sea search
 
-A carrier is the one ship whose departure can be followed: its radar signature is unique (330 m long and 80-90 m wide, where tankers and container ships of that length are 50-60 m) and at sea it sits inside a cluster of escorts. After a carrier-sized departure, every radar product over the sea around the base, from the start of the departure window to some days later, is fetched at 30 m in tiles inside the product's own footprint and scanned for targets far brighter than the surrounding sea (a 1.5 km median background), away from land. Candidates at least 240 m long are re-measured at 10 m with the same carrier test as at the pier. Fixes are chained only where the implied speed is 8-32 knots; the first fix's heading comes from the hull axis, resolved away from the base. Sentinel-1 images coasts and straits, not the open ocean, so the result is a sparse chain of fixes where coverage existed, and the reachable area where it did not - never a guessed line.
+After a carrier-sized departure, the sea search inspects available radar products around the base within its time, area and request limits. It fetches 60 km tiles at 50 m output spacing and compares bright targets with a local sea background. Candidates at least 200 m long may be re-measured at 10 m output spacing from the same acquisition. A successful re-measurement is a size check, not an independent observation or identification: the underlying IW GRD resolution is about 20 by 22 m.
+
+Large, wide targets are only size candidates. The current association rule accepts the first size candidate with compatible timing, then checks later candidates against it; it does not match dimensions to the original departure. Similar dimensions, nearby smaller targets and compatible timing cannot establish that two detections are the same vessel or that nearby vessels are escorts. Dashed map links show tentative timing associations, not a verified route. The search has sparse coverage, especially offshore; missing data, request limits and unavailable checks are reported. White map boxes bound usable pixels in fetched tiles and may contain gaps. The berth accuracy figures above do not validate this experimental search.
 
 # Where a ship can float
 
@@ -1597,14 +1602,13 @@ TOUR_STEPS = [
      "the opposite. Below the chart, weeks in which several bases changed "
      "together are called out."),
     ("8 · Sea search", 5,
-     "For carriers only: a carrier is the one ship whose radar signature is "
-     "unique (long and wide) and that sails with escorts. Pick a carrier "
-     "departure and search the radar strips over the sea around the base "
-     "for the days after it.\n\n"
-     "The satellite images coasts and straits, not the open ocean, so the "
-     "result is a chain of fixes where coverage existed and the reachable "
-     "area where it did not. Copernicus throttles free accounts: a search "
-     "takes 10-40 minutes and can be cancelled."),
+     "Pick a carrier-sized departure to inspect available radar strips "
+     "around the base. Large, wide targets are size candidates; their "
+     "identity and any relationship to nearby vessels remain unverified.\n\n"
+     "Dashed links are tentative timing associations, not a verified "
+     "route. White boxes bound usable pixels and may contain gaps. Sparse "
+     "coverage and request limits can leave candidates unchecked. A search "
+     "usually takes 10-40 minutes and can be cancelled."),
     ("9 · What to trust", 6,
      "Measured against photographs of Norfolk: about two thirds of ships "
      "are found, nine in ten detections are real, and ship counts per pass "

@@ -422,9 +422,9 @@ def test_pursuit_chain_rejects_impossible_speed():
     P.fixes = [pu.Fix(near, True, 320, 80, [], ), pu.Fix(far, True, 320, 80, [])]
     pu._chain(P)
     assert P.fixes[0].link_from == "base" and P.fixes[0].heading_deg is not None
-    assert P.fixes[1].link_from == "" and "not the same ship" in P.fixes[1].why
+    assert P.fixes[1].link_from == "" and "timing/speed assumptions" in P.fixes[1].why
     txt = P.summary()
-    assert "carrier-sized target" in txt and "cannot be this ship" in txt
+    assert "size candidate" in txt and "not linked under the timing assumptions" in txt
 
 
 def test_carrier_departures_filter(report):

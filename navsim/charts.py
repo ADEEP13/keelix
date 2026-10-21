@@ -422,8 +422,7 @@ def blank(fig, msg: str) -> None:
 
 # ================================================================ pursuit
 def draw_pursuit(fig, P, basemap=None) -> None:
-    """Map of a carrier search: strips searched, fixes, chain, reach."""
-    from .pursuit import compass, haversine_km, reach_km
+    """Map observed size candidates and tentative timing associations."""
     fig.clear()
     ax = fig.add_subplot(111)
     w, s, e, n = P.region
@@ -431,12 +430,12 @@ def draw_pursuit(fig, P, basemap=None) -> None:
         ax.imshow(basemap.rgb, extent=(w, e, s, n), alpha=0.9)
     else:
         ax.set_facecolor("#dfe9f3")
-    # searched strips
+    # Bound usable pixels only; the bounding boxes can still contain gaps.
     for sr in P.searched:
-        bw, bs, be, bn = sr.bbox
-        ax.add_patch(__import__("matplotlib").patches.Rectangle(
-            (bw, bs), be - bw, bn - bs, fill=True, fc="#ffffff", alpha=0.10,
-            ec="#ffffff", lw=0.6))
+        for bw, bs, be, bn in sr.coverage_boxes:
+            ax.add_patch(__import__("matplotlib").patches.Rectangle(
+                (bw, bs), be - bw, bn - bs, fill=True, fc="#ffffff", alpha=0.10,
+                ec="#ffffff", lw=0.6))
     # base
     ax.plot(*P.base_lonlat, marker="*", color="#ffe066", mec=INK, ms=16,
             zorder=6)
@@ -449,55 +448,33 @@ def draw_pursuit(fig, P, basemap=None) -> None:
         if f.is_carrier and not f.link_from:
             ax.plot(f.target.lon, f.target.lat, "o", mfc="none", mec=MUTED,
                     ms=7, mew=1.2, zorder=5)
-    # chain
+    # Dashed links express the model's timing hypothesis, not a known route.
     chain = P.chain
     pts = [P.base_lonlat] + [(f.target.lon, f.target.lat) for f in chain]
     if len(pts) > 1:
         xs, ys = zip(*pts)
         ax.plot(xs, ys, "--", color=RED, lw=1.4, zorder=5)
     for f in chain:
-        col = {"high": RED, "medium": AMBER, "low": MUTED}[f.confidence]
+        col = MUTED
         ax.plot(f.target.lon, f.target.lat, "o", color=col, mec=INK, ms=10,
                 zorder=7)
-        hd = f" {compass(f.heading_deg)}" if f.heading_deg is not None else ""
         ax.annotate(f"{f.when:%d %b} · {f.length_m:.0f}×{f.width_m:.0f} m"
-                    f"{hd} · {len(f.escorts)} escorts",
+                    f" · identity unverified",
                     (f.target.lon, f.target.lat), xytext=(8, -12),
                     textcoords="offset points", fontsize=8, color=INK,
                     bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=col,
                               lw=0.8, alpha=0.92), zorder=8)
-        if f.heading_deg is not None:
-            L = 0.35
-            dx = L * math.sin(math.radians(f.heading_deg))
-            dy = L * math.cos(math.radians(f.heading_deg)) * \
-                math.cos(math.radians(f.target.lat))
-            ax.annotate("", xy=(f.target.lon + dx, f.target.lat + dy),
-                        xytext=(f.target.lon, f.target.lat),
-                        arrowprops=dict(arrowstyle="->", color=col, lw=1.6),
-                        zorder=7)
-    # reach rings from the last known position (one day, 12 / 20 / 28 kn)
-    if chain:
-        last = chain[-1]
-        cx, cy = last.target.lon, last.target.lat
-        for kn, ls in ((12, ":"), (20, "--"), (28, "-")):
-            km = reach_km(24.0, kn)
-            dlat = km / 111.32
-            dlon = km / (111.32 * max(math.cos(math.radians(cy)), 0.2))
-            th = np.linspace(0, 2 * np.pi, 200)
-            ax.plot(cx + dlon * np.cos(th), cy + dlat * np.sin(th), ls,
-                    color=INK, lw=0.8, alpha=0.55)
-        ax.text(cx, cy + reach_km(24, 28) / 111.32, " one day at 12 / 20 / 28 kn",
-                fontsize=7.5, color=INK, va="bottom")
     ax.set_xlim(w, e)
     ax.set_ylim(s, n)
     ax.set_aspect(1.0 / max(math.cos(math.radians(0.5 * (s + n))), 0.2))
     ax.set_xlabel("longitude")
     ax.set_ylabel("latitude")
-    ax.set_title(f"Where the carrier that left {P.base_name} between "
-                 f"{P.t0:%d %b} and {P.t1:%d %b} was seen. White = strips "
-                 f"the radar imaged; grey circles = other carrier-sized "
-                 f"targets that cannot be it on timing.", fontsize=9,
+    ax.set_title(f"Experimental size candidates near {P.base_name} · "
+                 f"departure window {P.t0:%d %b}–{P.t1:%d %b}\n"
+                 "Dashed links: tentative timing associations; identity unverified.\n"
+                 "White: usable-pixel bounding envelopes (may contain gaps). "
+                 "Open circles: unlinked candidates.", fontsize=9,
                  loc="left")
     style(fig)
     ax.grid(True, color="white", lw=0.4, alpha=0.5)
-    fig.subplots_adjust(left=0.07, right=0.985, top=0.9, bottom=0.08)
+    fig.subplots_adjust(left=0.07, right=0.985, top=0.85, bottom=0.08)
